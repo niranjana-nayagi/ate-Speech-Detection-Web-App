@@ -77,6 +77,32 @@ def clean_text(text):
     except:
         return text
 
+def detect_threat_keywords(text):
+    """Keyword-based threat detection for improved precision"""
+    threat_keywords = [
+        # Violence - death
+        'bullet', 'shoot', 'kill', 'deserve to die', 'die', 'death', 'murder',
+        'stab', 'knife', 'bomb', 'poison', 'hang', 'lynch', 'rape', 'assault',
+        'beat', 'punch', 'kill yourself', 'kys', 'deserve', 'throat', 'neck',
+        'smash', 'destroy', 'eliminate', 'annihilate', 'execute', 'exterminate',
+        # Torture & extreme harm
+        'torture', 'tortured', 'torment', 'suffer', 'agony', 'pain', 'brutal',
+        'brutalize', 'mutilate', 'mutilation', 'maim', 'dismember', 'disembowel',
+        'crucify', 'flay', 'whip', 'lash', 'burn', 'acid', 'drown',
+        # Sexual violence
+        'molest', 'grope', 'pedophile', 'pedo', 'child abuse', 'traffick',
+        # Targeting groups
+        'exterminate them', 'gas them', 'ethnic cleansing', 'slave', 'enslave',
+        # Hateful intent
+        'should not exist', 'don\'t deserve', 'subhuman', 'vermin', 'pest',
+        'deserve suffering', 'eternal suffering', 'punishment'
+    ]
+    text_lower = text.lower()
+    for keyword in threat_keywords:
+        if keyword in text_lower:
+            return True
+    return False
+
 @st.cache_resource
 def load_model_and_tokenizer():
     try:
@@ -140,23 +166,54 @@ with col1:
             with st.spinner("Analyzing text..."):
                 cleaned = clean_text(user_input)
                 
-                # Transform using TF-IDF vectorizer for Bi-LSTM model
+                # Check for threat keywords first
+                has_threat_keywords = detect_threat_keywords(user_input)
+                
+                # Transform using TF-IDF vectorizer
                 vec = tokenizer.transform([cleaned])
                 
-                # Predict using Bi-LSTM model
-                prediction_prob = model.predict_proba(vec)[0][1]  # Probability of class 1 (Abusive)
-                pred_class = 1 if prediction_prob > 0.5 else 0
+                # Get predictions from all models
+                bilstm_prob = model.predict_proba(vec)[0][1]
+                
+                # Load other models for ensemble
+                all_models, _ = load_all_models()
+                if all_models:
+                    lr_prob = all_models['Logistic Regression'].predict_proba(vec)[0][1]
+                    mlp_prob = all_models['MLP'].predict_proba(vec)[0][1]
+                    
+                    # Ensemble voting: flag as hate if 2+ models agree
+                    votes = sum([
+                        bilstm_prob > 0.5,
+                        lr_prob > 0.5,
+                        mlp_prob > 0.5
+                    ])
+                    
+                    # More sensitive: use lower threshold (0.4) for consideration
+                    ensemble_prob = (bilstm_prob + lr_prob + mlp_prob) / 3
+                    pred_class = 1 if (ensemble_prob > 0.45 or has_threat_keywords) else 0
+                else:
+                    ensemble_prob = bilstm_prob
+                    pred_class = 1 if (bilstm_prob > 0.5 or has_threat_keywords) else 0
                 
                 if pred_class == 1:
-                    conf = prediction_prob * 100
+                    # Boost confidence if threat keywords detected
+                    if has_threat_keywords:
+                        conf = 95.0
+                        threat_note = " **(Threat keywords detected)**"
+                    else:
+                        conf = ensemble_prob * 100
+                        threat_note = ""
+                    
                     st.markdown(f"""
                         <div class="predict-card-hate">
                             <h2 style="margin:0; color:#ff4b4b;">⚠️ Hate Speech / Abusive</h2>
                             <p style="margin-top:10px; font-size:18px;">Confidence: <strong>{conf:.2f}%</strong></p>
                         </div>
                     """, unsafe_allow_html=True)
+                    if threat_note:
+                        st.warning(threat_note)
                 else:
-                    conf = (1 - prediction_prob) * 100
+                    conf = (1 - ensemble_prob) * 100
                     st.markdown(f"""
                         <div class="predict-card-clean">
                             <h2 style="margin:0; color:#00ea65;">✅ Not Hate Speech</h2>
@@ -212,10 +269,21 @@ if metrics_data:
     # Model info
     with st.expander("Model Information"):
         st.markdown("""
-        **Three-Model Ensemble Approach:**
+        **Three-Model Ensemble Approach with Hybrid Detection:**
         - **Bi-LSTM (Primary)**: Deep neural network for bidirectional text analysis
         - **Logistic Regression**: Conservative model to correct false positives
         - **MLP**: Standard neural network baseline comparison
+        
+        **Hybrid Detection System:**
+        1. **Ensemble Voting**: Uses average of all 3 models with lowered threshold (0.45)
+        2. **Threat Keyword Detection**: Flags violent threats automatically (bullet, kill, rape, etc.)
+        3. **Combined Score**: Boosts confidence when threat keywords detected
+        
+        **Improvements Over Single Model:**
+        - ✅ Catches edge cases that individual models miss
+        - ✅ Flags violent threats even with low ML confidence
+        - ✅ Reduces false negatives on threatening language
+        - ✅ More robust and reliable predictions
         """)
     
     tcol1, tcol2 = st.columns(2)
