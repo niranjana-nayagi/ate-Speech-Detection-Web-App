@@ -1,0 +1,15 @@
+{
+    "primary_model": "Bi-LSTM",
+    "model_type": "Bi-LSTM with Logistic Regression & MLP Comparison",
+    "architecture": "Deep Neural Network with Bidirectional Processing",
+    "models": [
+        "Bi-LSTM",
+        "Logistic Regression",
+        "MLP"
+    ],
+    "max_features": 5000,
+    "ngram_range": [
+        1,
+        3
+    ]
+}
